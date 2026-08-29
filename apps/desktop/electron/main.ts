@@ -15083,6 +15083,132 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
   )
 }
 
+// ── Provider quota meter (statusbar) ─────────────────────────────────────
+// Aggregates remaining limits for the statusbar quota item:
+//   Kimi Coding Plan → GET {coding base}/v1/usages with the sk-kimi- key from
+//     HERMES_HOME/.env (the same endpoint the Kimi Code CLI hits).
+//   Codex subscription → agent.account_usage inside the managed venv, which
+//     reads the ChatGPT backend /usage with the stored OAuth tokens.
+// Cached 5 minutes; the renderer polls every 60s and repaints its bars.
+type ProviderQuotaWindow = { label: string; used_percent: number | null; reset_at: string }
+let providerQuotaCache: { at: number; payload: unknown } | null = null
+const PROVIDER_QUOTA_TTL_MS = 5 * 60 * 1000
+
+function resolveQuotaVenvPython() {
+  const roots = [
+    process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT),
+    ACTIVE_HERMES_ROOT
+  ].filter(Boolean)
+  for (const root of roots) {
+    const candidate = path.join(root as string, 'venv', 'Scripts', 'python.exe')
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return path.join(VENV_ROOT, 'Scripts', 'python.exe')
+}
+
+function readKimiApiKey() {
+  try {
+    const match = fs.readFileSync(path.join(HERMES_HOME, '.env'), 'utf8').match(/^KIMI_API_KEY=(.*)$/m)
+    return (match?.[1] ?? '').trim()
+  } catch {
+    return ''
+  }
+}
+
+async function fetchKimiQuotaWindows(): Promise<ProviderQuotaWindow[]> {
+  const apiKey = readKimiApiKey()
+  if (!apiKey) throw new Error('KIMI_API_KEY not configured')
+  const response = await fetch('https://api.kimi.com/coding/v1/usages', {
+    headers: { Authorization: `Bearer ${apiKey}`, 'User-Agent': 'KimiCLI/1.6' },
+    signal: AbortSignal.timeout(15000)
+  })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const data = await response.json()
+  const pct = (used, limit) => {
+    const bounded = Number(limit)
+    return bounded > 0 ? Math.round((Number(used) / bounded) * 1000) / 10 : null
+  }
+  const windows: ProviderQuotaWindow[] = []
+  const usage = data?.usage
+  if (usage?.limit != null) {
+    windows.push({
+      label: '周额度',
+      used_percent: pct(usage.used, usage.limit),
+      reset_at: String(usage.resetTime || '')
+    })
+  }
+  const short = Array.isArray(data?.limits) ? data.limits[0] : null
+  if (short?.detail?.limit != null) {
+    windows.push({
+      label: '5小时窗口',
+      used_percent: pct(short.detail.used, short.detail.limit),
+      reset_at: String(short.detail.resetTime || '')
+    })
+  }
+  return windows
+}
+
+function fetchCodexQuotaWindows(): Promise<{ plan?: string; windows: ProviderQuotaWindow[] }> {
+  const script = [
+    'import json',
+    'from agent.account_usage import fetch_account_usage',
+    "snap = fetch_account_usage('openai-codex')",
+    'if snap is None:',
+    "    print(json.dumps({'windows': []}))",
+    'else:',
+    "    print(json.dumps({'plan': snap.plan, 'windows': [{'label': w.label, 'used_percent': w.used_percent, 'reset_at': str(w.reset_at or '')} for w in snap.windows]}))"
+  ].join('\n')
+  return new Promise((resolve, reject) => {
+    const child = spawn(resolveQuotaVenvPython(), ['-c', script], {
+      cwd: process.env.HERMES_DESKTOP_HERMES_ROOT || ACTIVE_HERMES_ROOT,
+      env: process.env,
+      windowsHide: true,
+      timeout: 30000
+    })
+    let stdout = ''
+    child.stdout?.on('data', chunk => {
+      stdout += chunk
+    })
+    child.on('error', reject)
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(`codex usage exited ${code}`))
+        return
+      }
+      try {
+        const line = stdout.split('\n').find(l => l.trim().startsWith('{'))
+        resolve(line ? JSON.parse(line) : { windows: [] })
+      } catch (error) {
+        reject(error)
+      }
+    })
+  })
+}
+
+ipcMain.handle('hermes:quota:providers', async () => {
+  const now = Date.now()
+  if (providerQuotaCache && now - providerQuotaCache.at < PROVIDER_QUOTA_TTL_MS) {
+    return providerQuotaCache.payload
+  }
+  const [kimiSettled, codexSettled] = await Promise.allSettled([
+    fetchKimiQuotaWindows(),
+    fetchCodexQuotaWindows()
+  ])
+  const payload = {
+    fetched_at: new Date().toISOString(),
+    kimi:
+      kimiSettled.status === 'fulfilled'
+        ? { windows: kimiSettled.value }
+        : { error: String(kimiSettled.reason?.message || kimiSettled.reason) },
+    codex:
+      codexSettled.status === 'fulfilled'
+        ? codexSettled.value
+        : { error: String(codexSettled.reason?.message || codexSettled.reason) }
+  }
+  providerQuotaCache = { at: now, payload }
+  return payload
+})
+
 ipcMain.handle('hermes:agents:roster', async () => {
   const registry = readDesktopConnectionsRegistry()
   const enumerations = await enumerateRegistryAgentSources(registry)

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   getGatewayWsUrlFor: payload => ipcRenderer.invoke('hermes:gateway:ws-url-for', payload),
   // Union agent roster across every registered connection.
   getAgentRoster: () => ipcRenderer.invoke('hermes:agents:roster'),
+  getProviderQuota: () => ipcRenderer.invoke('hermes:quota:providers'),
   openSessionWindow: (sessionId, opts) => ipcRenderer.invoke('hermes:window:openSession', sessionId, opts),
   openSessionInTerminal: (sessionId, opts) => ipcRenderer.invoke('hermes:window:openInTerminal', sessionId, opts),
   openWindow: () => ipcRenderer.invoke('hermes:window:openInstance'),

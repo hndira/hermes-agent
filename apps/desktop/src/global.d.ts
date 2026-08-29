@@ -32,6 +32,13 @@ declare global {
       }) => Promise<GatewayWsUrlResult>
       // Union agent roster across every registered connection.
       getAgentRoster?: () => Promise<DesktopAgentRoster>
+      // Remaining provider quota for the statusbar meter. Fetched by the main
+      // process: Kimi usages endpoint + Codex /usage via the managed venv.
+      getProviderQuota?: () => Promise<{
+        fetched_at?: string
+        kimi?: { windows: Array<{ label: string; used_percent: number | null; reset_at: string }>; error?: string }
+        codex?: { plan?: string; windows: Array<{ label: string; used_percent: number | null; reset_at: string }>; error?: string }
+      }>
       // Credential-free routes across the union connection registry. The
       // optional profile list is used only by the single-local v1 fallback;
       // endpoint and auth material never crosses the IPC boundary.

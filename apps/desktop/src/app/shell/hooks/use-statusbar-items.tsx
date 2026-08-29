@@ -89,28 +89,22 @@ export function useStatusbarItems({
   const copy = t.shell.statusbar
   const fileMenu = t.fileMenu
 
-  // Provider quota meter — polls the local quota dashboard service
-  // (hermes-home/quota-dashboard.py on 127.0.0.1:8765), which aggregates the
-  // Kimi Coding Plan windows (weekly + 5h) and the Codex subscription window.
-  // Stays empty while the service is unreachable so the bar stays quiet.
-  const [quotaLabel, setQuotaLabel] = useState('')
+  // Provider quota meter — the main process aggregates Kimi Coding Plan
+  // (weekly + 5h windows) and the Codex subscription window; we poll every
+  // 60s and paint remaining-percentage bars. Stays empty while unavailable
+  // so the bar stays quiet.
+  const [quota, setQuota] = useState<{
+    kimi?: { windows: Array<{ label: string; used_percent: number | null }>; error?: string }
+    codex?: { windows: Array<{ label: string; used_percent: number | null }>; error?: string }
+  } | null>(null)
   useEffect(() => {
     let disposed = false
     const load = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:8765/api/usage', { signal: AbortSignal.timeout(4000) })
-        const d = await res.json()
-        const remaining = (windows: Array<{ percent?: number; used_percent?: number }> | undefined) =>
-          (windows ?? []).map(w => Math.max(0, Math.round(100 - (w.percent ?? w.used_percent ?? 0)))).join('/')
-        const kimi = remaining(d?.kimi?.windows)
-        const codex = remaining(d?.codex?.windows)
-        if (!disposed && ((d?.kimi?.windows?.length ?? 0) > 0 || (d?.codex?.windows?.length ?? 0) > 0)) {
-          setQuotaLabel(`K ${kimi}% · C ${codex}%`)
-        } else if (!disposed) {
-          setQuotaLabel('')
-        }
+        const data = await window.hermesDesktop?.getProviderQuota?.()
+        if (!disposed) setQuota(data ?? null)
       } catch {
-        if (!disposed) setQuotaLabel('')
+        if (!disposed) setQuota(null)
       }
     }
     void load()
@@ -120,6 +114,22 @@ export function useStatusbarItems({
       clearInterval(timer)
     }
   }, [])
+  const quotaLabel = useMemo(() => {
+    const remaining = (windows: Array<{ used_percent: number | null }> | undefined) => {
+      if (!windows?.length) return null
+      const worst = Math.max(...windows.map(w => w.used_percent ?? 0))
+      const pct = Math.max(0, Math.min(100, Math.round(100 - worst)))
+      const filled = Math.round(pct / 20)
+      return `${'█'.repeat(filled)}${'░'.repeat(5 - filled)} ${pct}%`
+    }
+    const kimi = remaining(quota?.kimi?.windows)
+    const codex = remaining(quota?.codex?.windows)
+    if (!kimi && !codex) return ''
+    const parts: string[] = []
+    if (kimi) parts.push(`K[${kimi}]`)
+    if (codex) parts.push(`C[${codex}]`)
+    return parts.join(' ')
+  }, [quota])
 
   const primaryActiveSessionId = useStore($activeSessionId)
   const activeGatewayProfile = useStore($activeGatewayProfile)
@@ -594,7 +604,7 @@ export function useStatusbarItems({
         hidden: !quotaLabel,
         id: 'provider-quota',
         label: quotaLabel,
-        title: '剩余额度 K=Kimi(周/5h) C=Codex 订阅 · 数据源 127.0.0.1:8765',
+        title: '剩余额度 K=Kimi(周/5h 取最紧) C=Codex 订阅 · 每 60 秒刷新',
         variant: 'text'
       },
       {
