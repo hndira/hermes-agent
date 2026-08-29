@@ -15145,6 +15145,16 @@ async function fetchKimiQuotaWindows(): Promise<ProviderQuotaWindow[]> {
       reset_at: String(short.detail.resetTime || '')
     })
   }
+  // 月度会员额度 — the usages payload only fills totalQuota on some plan
+  // tiers; when absent the console is the only source, so we omit the row.
+  const monthly = data?.totalQuota
+  if (monthly?.limit != null && Number(monthly.limit) > 0) {
+    windows.push({
+      label: '月额度',
+      used_percent: pct(monthly.used, monthly.limit),
+      reset_at: String(monthly.resetTime || '')
+    })
+  }
   return windows
 }
 

@@ -115,20 +115,25 @@ export function useStatusbarItems({
     }
   }, [])
   const quotaLabel = useMemo(() => {
-    const remaining = (windows: Array<{ used_percent: number | null }> | undefined) => {
-      if (!windows?.length) return null
-      const worst = Math.max(...windows.map(w => w.used_percent ?? 0))
-      const pct = Math.max(0, Math.min(100, Math.round(100 - worst)))
-      const filled = Math.round(pct / 20)
-      return `${'█'.repeat(filled)}${'░'.repeat(5 - filled)} ${pct}%`
+    // Same visual language as the context meter: [████░░░░░░] NN% bars at the
+    // same length, one per provider window, labelled 周/5h/月(Kimi) and C(Codex).
+    const bar = (usedPercent: number | null) => {
+      const used = Math.max(0, Math.min(100, Math.round(usedPercent ?? 0)))
+      const filled = Math.round(used / 10)
+      return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${used}%`
     }
-    const kimi = remaining(quota?.kimi?.windows)
-    const codex = remaining(quota?.codex?.windows)
-    if (!kimi && !codex) return ''
+    const shortLabel = (label: string) =>
+      label.includes('5') ? '5h' : label.includes('月') ? '月' : label.includes('周') ? '周' : label
     const parts: string[] = []
-    if (kimi) parts.push(`K[${kimi}]`)
-    if (codex) parts.push(`C[${codex}]`)
-    return parts.join(' ')
+    for (const w of quota?.kimi?.windows ?? []) {
+      parts.push(`${shortLabel(w.label)} ${bar(w.used_percent)}`)
+    }
+    const codexWindows = quota?.codex?.windows ?? []
+    if (codexWindows.length) {
+      const worst = Math.max(...codexWindows.map(w => w.used_percent ?? 0))
+      parts.push(`C ${bar(worst)}`)
+    }
+    return parts.join('  ')
   }, [quota])
 
   const primaryActiveSessionId = useStore($activeSessionId)
@@ -604,7 +609,7 @@ export function useStatusbarItems({
         hidden: !quotaLabel,
         id: 'provider-quota',
         label: quotaLabel,
-        title: '剩余额度 K=Kimi(周/5h 取最紧) C=Codex 订阅 · 每 60 秒刷新',
+        title: '额度用量(已用%):周/5h/月=Kimi Coding Plan,C=Codex 订阅 · 每 60 秒刷新 · 月额度接口未提供时自动隐藏',
         variant: 'text'
       },
       {
