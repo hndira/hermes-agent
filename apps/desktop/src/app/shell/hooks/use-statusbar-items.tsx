@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { ConnectionSwitcher } from '@/app/chat/sidebar/connection-switcher'
@@ -88,6 +88,39 @@ export function useStatusbarItems({
   const { t } = useI18n()
   const copy = t.shell.statusbar
   const fileMenu = t.fileMenu
+
+  // Provider quota meter — polls the local quota dashboard service
+  // (hermes-home/quota-dashboard.py on 127.0.0.1:8765), which aggregates the
+  // Kimi Coding Plan windows (weekly + 5h) and the Codex subscription window.
+  // Stays empty while the service is unreachable so the bar stays quiet.
+  const [quotaLabel, setQuotaLabel] = useState('')
+  useEffect(() => {
+    let disposed = false
+    const load = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:8765/api/usage', { signal: AbortSignal.timeout(4000) })
+        const d = await res.json()
+        const remaining = (windows: Array<{ percent?: number; used_percent?: number }> | undefined) =>
+          (windows ?? []).map(w => Math.max(0, Math.round(100 - (w.percent ?? w.used_percent ?? 0)))).join('/')
+        const kimi = remaining(d?.kimi?.windows)
+        const codex = remaining(d?.codex?.windows)
+        if (!disposed && ((d?.kimi?.windows?.length ?? 0) > 0 || (d?.codex?.windows?.length ?? 0) > 0)) {
+          setQuotaLabel(`K ${kimi}% · C ${codex}%`)
+        } else if (!disposed) {
+          setQuotaLabel('')
+        }
+      } catch {
+        if (!disposed) setQuotaLabel('')
+      }
+    }
+    void load()
+    const timer = setInterval(load, 60_000)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
+  }, [])
+
   const primaryActiveSessionId = useStore($activeSessionId)
   const activeGatewayProfile = useStore($activeGatewayProfile)
   // What the button paints and flips is whether the terminal is ON SCREEN —
@@ -558,6 +591,13 @@ export function useStatusbarItems({
         variant: 'menu'
       },
       {
+        hidden: !quotaLabel,
+        id: 'provider-quota',
+        label: quotaLabel,
+        title: '剩余额度 K=Kimi(周/5h) C=Codex 订阅 · 数据源 127.0.0.1:8765',
+        variant: 'text'
+      },
+      {
         detail: <LiveDuration since={sessionStartedAt} />,
         hidden: !sessionStartedAt,
         id: 'session-timer',
@@ -596,6 +636,7 @@ export function useStatusbarItems({
       contextUsage,
       copy,
       gaugeUsage,
+      quotaLabel,
       sessionStartedAt,
       gatewayState,
       terminalShowing,
