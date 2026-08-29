@@ -1,5 +1,5 @@
 import { useStore } from '@nanostores/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { ConnectionSwitcher } from '@/app/chat/sidebar/connection-switcher'
@@ -299,17 +299,29 @@ export function useStatusbarItems({
   // and the store merges rather than replaces, so the PREVIOUS session's gauge
   // numbers survive the switch. Mid-turn there's no breakdown by design and
   // the streamed usage carries the gauge.
+  //
+  // Local patch: keep the last breakdown seen for the ACTIVE session so the
+  // meter doesn't flicker to a bare tok count mid-turn or right after a
+  // session switch (the gateway reports nothing in both windows). The cache
+  // is keyed by session — switching sessions starts clean.
+  const lastBreakdownRef = useRef<{ sessionId: string | null; breakdown: NonNullable<ReturnType<typeof useContextBreakdown>['breakdown']> } | null>(null)
+  if (contextBreakdown) {
+    lastBreakdownRef.current = { sessionId: activeSessionId, breakdown: contextBreakdown }
+  }
+  const stableBreakdown =
+    contextBreakdown ??
+    (lastBreakdownRef.current?.sessionId === activeSessionId ? lastBreakdownRef.current.breakdown : null)
   const gaugeUsage = useMemo<UsageStats>(
     () =>
-      contextBreakdown
+      stableBreakdown
         ? {
             ...currentUsage,
-            context_max: contextBreakdown.context_max,
-            context_percent: contextBreakdown.context_percent,
-            context_used: contextBreakdown.context_used
+            context_max: stableBreakdown.context_max,
+            context_percent: stableBreakdown.context_percent,
+            context_used: stableBreakdown.context_used
           }
         : currentUsage,
-    [contextBreakdown, currentUsage]
+    [stableBreakdown, currentUsage]
   )
 
   const contextUsage = useMemo(() => usageContextLabel(gaugeUsage), [gaugeUsage])
@@ -600,7 +612,7 @@ export function useStatusbarItems({
         menuAlign: 'end',
         menuClassName: 'w-auto border-(--ui-stroke-secondary) p-0',
         menuContent: (
-          <ContextUsagePanel breakdown={contextBreakdown} loading={contextBreakdownLoading} usage={gaugeUsage} />
+          <ContextUsagePanel breakdown={stableBreakdown} loading={contextBreakdownLoading} usage={gaugeUsage} />
         ),
         toggleLabel: copy.toggleContextUsage,
         variant: 'menu'
@@ -646,7 +658,7 @@ export function useStatusbarItems({
       chatOpen,
       clientVersionItem,
       contextBar,
-      contextBreakdown,
+      stableBreakdown,
       contextBreakdownLoading,
       contextUsage,
       copy,
