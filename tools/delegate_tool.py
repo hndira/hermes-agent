@@ -843,6 +843,21 @@ def _normalize_role(r: Optional[str]) -> str:
     return "leaf"
 
 
+def _resolve_child_role(
+    requested_role, child_depth: int, max_spawn_depth: int, orchestrator_enabled: bool
+) -> str:
+    """Fork patch: explicit-first role resolution (pure, unit-testable).
+
+    'orchestrator' only when explicitly requested AND the kill switch is on
+    AND depth budget remains; everything else — including no role — is a
+    plain 'leaf'.
+    """
+    ok = orchestrator_enabled and child_depth < max_spawn_depth
+    if _normalize_role(requested_role) == "orchestrator" and ok:
+        return "orchestrator"
+    return "leaf"
+
+
 def _get_max_concurrent_children() -> int:
     """Read delegation.max_concurrent_children from config, falling back to
     DELEGATION_MAX_CONCURRENT_CHILDREN env var, then the default (10).
@@ -1646,16 +1661,11 @@ def _build_child_agent(
     # to guess a fact the config already knows); it is still accepted and
     # normalised for wire compat, but capability comes from depth alone.
     # ── Role resolution ─────────────────────────────────────────────────
-    # Fork patch: explicit-first. An explicitly requested 'orchestrator' is
-    # honored only when the kill switch is on and depth budget remains;
-    # everything else — including no role — is a plain 'leaf'. This restores
-    # the intuitive contract ("children are leaves unless told otherwise")
-    # while keeping nested delegation possible via role='orchestrator'.
+    # Fork patch: explicit-first (see _resolve_child_role).
     child_depth = getattr(parent_agent, "_delegate_depth", 0) + 1
-    max_spawn = _get_max_spawn_depth()
-    orchestrator_ok = _get_orchestrator_enabled() and child_depth < max_spawn
-    requested_role = _normalize_role(role)
-    effective_role = "orchestrator" if (requested_role == "orchestrator" and orchestrator_ok) else "leaf"
+    effective_role = _resolve_child_role(
+        role, child_depth, _get_max_spawn_depth(), _get_orchestrator_enabled()
+    )
 
     # ── Subagent identity (stable across events, 0-indexed for TUI) ─────
     # subagent_id is generated here so the progress callback, the
@@ -2473,7 +2483,7 @@ _LEAF_LIMITER_LOCK = threading.Lock()
 _LEAF_LIMITER = None  # (cap, BoundedSemaphore)
 
 
-def _leaf_limiter_acquire(child):
+def _leaf_limiter_acquire(child, blocking: bool = True):
     if getattr(child, "_delegate_role", "leaf") != "leaf":
         return None
     global _LEAF_LIMITER
@@ -2482,8 +2492,10 @@ def _leaf_limiter_acquire(child):
         if _LEAF_LIMITER is None or _LEAF_LIMITER[0] != cap:
             _LEAF_LIMITER = (cap, threading.BoundedSemaphore(max(1, cap)))
         sem = _LEAF_LIMITER[1]
-    sem.acquire()
-    return sem
+    if blocking:
+        sem.acquire()
+        return sem
+    return sem if sem.acquire(blocking=False) else None
 
 
 def _leaf_limiter_release(slot):
@@ -4902,15 +4914,28 @@ DELEGATE_TASK_SCHEMA = {
                                 "fields you will read."
                             ),
                         },
+                        "role": {
+                            "type": "string",
+                            "enum": ["leaf", "orchestrator"],
+                            "description": (
+                                "Fork semantics (explicit-first): 'leaf' "
+                                "(default) cannot delegate further; "
+                                "'orchestrator' may itself call delegate_task "
+                                "to fan out sub-work while spawn depth "
+                                "remains. Orchestrator multiplies cost — "
+                                "pass it only when this child must split "
+                                "its work into sub-children."
+                            ),
+                        },
                     },
                     "required": ["goal"],
                 },
                 # No maxItems — the runtime limit is configurable via
                 # delegation.max_concurrent_children (default 3) and
                 # enforced with a clear error in delegate_task().
-                # NOTE: the handler also accepts a per-task `role` — legacy,
-                # ignored: delegation capability is depth-derived, not
-                # caller-declared. Unadvertised on purpose; do not re-add.
+                # Fork: per-task `role` IS honored — explicit-first semantics
+                # (see _resolve_child_role). 'leaf' default; 'orchestrator'
+                # granted only while enabled and depth budget remains.
                 "description": "(rebuilt at get_definitions() time)",
             },
             # NOTE: the handler also accepts `background` (bool) — DEPRECATED,
