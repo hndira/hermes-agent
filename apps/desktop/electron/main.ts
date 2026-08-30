@@ -15195,6 +15195,50 @@ function fetchCodexQuotaWindows(): Promise<{ plan?: string; windows: ProviderQuo
   })
 }
 
+// ── Fork: usage statistics (使用统计页) ──────────────────────────────────
+// Parses the per-call token lines from agent.log into per-day/per-model
+// aggregates for the usage-stats workspace page. Cached 60s — the file is
+// append-only and cheap to re-read, but a mid-session refresh shouldn't
+// re-scan a multi-MB log on every poll.
+const USAGE_LINE_RE =
+  /(\d{4}-\d{2}-\d{2}) \d+:\d+:\d+.*API call #\d+: model=(\S+) provider=(\S+) in=(\d+) out=(\d+) total=(\d+)/
+let usageStatsCache: { at: number; payload: unknown } | null = null
+const USAGE_STATS_TTL_MS = 60 * 1000
+
+ipcMain.handle('hermes:usage:stats', async () => {
+  const now = Date.now()
+  if (usageStatsCache && now - usageStatsCache.at < USAGE_STATS_TTL_MS) {
+    return usageStatsCache.payload
+  }
+  const days: Record<string, Record<string, [number, number, number]>> = {}
+  const sessions = new Set<string>()
+  try {
+    const text = fs.readFileSync(path.join(HERMES_HOME, 'logs', 'agent.log'), 'utf8')
+    for (const line of text.split('\n')) {
+      const m = line.match(USAGE_LINE_RE)
+      if (m) {
+        const [, day, model, , inTok, outTok] = m
+        const bucket = (days[day] ??= {})
+        const agg = (bucket[model] ??= [0, 0, 0])
+        agg[0] += Number(inTok)
+        agg[1] += Number(outTok)
+        agg[2] += 1
+      }
+      const sm = line.match(/conversation turn: session=(\S+)/)
+      if (sm) {
+        sessions.add(sm[1])
+      }
+    }
+  } catch {
+    // missing/unreadable log → empty payload; the page renders zeroes
+  }
+  usageStatsCache = {
+    at: now,
+    payload: { days, sessions: sessions.size, generated_at: new Date().toISOString() }
+  }
+  return usageStatsCache.payload
+})
+
 ipcMain.handle('hermes:quota:providers', async () => {
   const now = Date.now()
   if (providerQuotaCache && now - providerQuotaCache.at < PROVIDER_QUOTA_TTL_MS) {

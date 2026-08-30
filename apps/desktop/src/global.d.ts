@@ -39,6 +39,13 @@ declare global {
         kimi?: { windows: Array<{ label: string; used_percent: number | null; reset_at: string }>; error?: string }
         codex?: { plan?: string; windows: Array<{ label: string; used_percent: number | null; reset_at: string }>; error?: string }
       }>
+      // Aggregated token usage per day/model, parsed from the local agent log
+      // in the main process (使用统计页 data source).
+      getUsageStats?: () => Promise<{
+        days: Record<string, Record<string, [number, number, number]>>
+        sessions: number
+        generated_at: string
+      }>
       // Credential-free routes across the union connection registry. The
       // optional profile list is used only by the single-local v1 fallback;
       // endpoint and auth material never crosses the IPC boundary.
