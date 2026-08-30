@@ -4938,7 +4938,8 @@ DELEGATE_TASK_SCHEMA = {
                 "description": "(rebuilt at get_definitions() time)",
             },
             # Fork: top-level `role` re-advertised with explicit-first
-            # semantics (default 'leaf'); applies when `tasks` is omitted.
+            # semantics (default 'leaf'); a per-task `role` takes priority
+            # over this default for individual tasks in the batch.
             "role": {
                 "type": "string",
                 "enum": ["leaf", "orchestrator"],
