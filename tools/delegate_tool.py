@@ -4743,14 +4743,16 @@ def _build_top_level_description() -> str:
     # vocabulary most sessions never see. The list below is the fail-safe
     # superset; model_tools session-filters it to the tools the session
     # actually has, dropping the whole line when none apply.
-    # Delegation capability is depth-derived (no role param): mention
-    # recursion only where it's actually available.
+    # Fork: explicit-first — children are leaves by default; a child can
+    # fan out sub-work only when its task explicitly opts into
+    # role='orchestrator' (and depth budget remains).
     if orchestration_available:
         restrictions_rule = (
             "- Children cannot call clarify, memory, or cronjob.\n"
-            "- Children can themselves delegate while depth remains "
-            f"(max_spawn_depth={_get_max_spawn_depth()}); the runtime "
-            "derives this from depth automatically.\n"
+            "- Children default to 'leaf' and cannot delegate. Pass "
+            "role='orchestrator' on a task that must fan out sub-work "
+            f"(depth budget: max_spawn_depth={_get_max_spawn_depth()}); "
+            "orchestrator multiplies cost — opt in sparingly.\n"
         )
     else:
         restrictions_rule = (
@@ -4843,6 +4845,9 @@ def _build_dynamic_schema_overrides() -> dict:
         k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()
     }
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
+    # Fork: role description carries the live max_spawn_depth, so refresh it
+    # in the same dynamic pass instead of freezing the import-time text.
+    overrides_params["properties"]["role"]["description"] = _build_role_param_description()
 
     return {
         "description": _build_top_level_description(),
