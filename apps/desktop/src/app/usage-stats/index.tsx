@@ -291,7 +291,7 @@ export function UsageStatsPage() {
         </section>
 
         <section>
-          <h2 className="mb-2 text-sm font-semibold">供应商每日用量堆叠柱状图(Kimi vs GPT/Codex)</h2>
+          <h2 className="mb-2 text-sm font-semibold">供应商每日用量对比(Kimi vs GPT/Codex,并排柱)</h2>
           <svg viewBox={`0 0 ${W} ${H + 18}`} className="w-full rounded-xl border border-(--ui-stroke-tertiary)">
             {[1, 0.5, 0].map(f => (
               <g key={f}>
@@ -309,8 +309,9 @@ export function UsageStatsPage() {
               </g>
             ))}
             {providerByDay.map((row, idx) => {
-              const bw = ((W - 2 * PAD) / providerByDay.length) * 0.55
-              const x = PAD + (idx * (W - 2 * PAD)) / providerByDay.length + bw * 0.4
+              const slot = (W - 2 * PAD) / providerByDay.length
+              const barW = slot * 0.28
+              const x0 = PAD + idx * slot + slot * 0.16
               const total = row.kimi + row.gpt
               if (total <= 0) return null
               const kimiH = (row.kimi / maxProviderDay) * (H - 2 * PAD)
@@ -322,18 +323,18 @@ export function UsageStatsPage() {
                 <g key={row.day}>
                   <title>{tip}</title>
                   {row.kimi > 0 && (
-                    <rect x={x} y={H - PAD - kimiH} width={bw} height={kimiH} fill="#e07b39" rx="2">
+                    <rect x={x0} y={H - PAD - kimiH} width={barW} height={kimiH} fill="#e07b39" rx="2">
                       <title>{tip}</title>
                     </rect>
                   )}
                   {row.gpt > 0 && (
-                    <rect x={x} y={H - PAD - kimiH - gptH} width={bw} height={gptH} fill="#3a56c5" rx="2">
+                    <rect x={x0 + barW + slot * 0.06} y={H - PAD - gptH} width={barW} height={gptH} fill="#3a56c5" rx="2">
                       <title>{tip}</title>
                     </rect>
                   )}
                   {(idx % 5 === 0 || idx === providerByDay.length - 1) && (
                     <text
-                      x={x + bw / 2}
+                      x={x0 + barW + slot * 0.03}
                       y={H - PAD + 12}
                       textAnchor="middle"
                       fontSize="9"
