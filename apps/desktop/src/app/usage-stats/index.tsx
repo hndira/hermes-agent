@@ -88,6 +88,29 @@ export function UsageStatsPage() {
   const totalIn = modelAgg.reduce((a, [, t]) => a + t.inTok, 0)
   const totalOut = modelAgg.reduce((a, [, t]) => a + t.outTok, 0)
 
+  // 供应商分组(Kimi 套餐 vs GPT/Codex 订阅)的每日堆叠数据
+  const providerByDay = useMemo(() => {
+    const rows: Array<{ day: string; kimi: number; gpt: number; parts: Array<{ model: string; tokens: number }> }> = []
+    for (const day of days) {
+      let kimi = 0
+      let gpt = 0
+      const parts: Array<{ model: string; tokens: number }> = []
+      for (const [model, [i, o]] of Object.entries(data?.days[day] ?? {})) {
+        const t = i + o
+        parts.push({ model, tokens: t })
+        if (model.startsWith('kimi') || model === 'k3-256k') {
+          kimi += t
+        } else {
+          gpt += t
+        }
+      }
+      parts.sort((a, b) => b.tokens - a.tokens)
+      rows.push({ day, kimi, gpt, parts })
+    }
+    return rows
+  }, [data, days])
+  const maxProviderDay = Math.max(1, ...providerByDay.map(r => r.kimi + r.gpt))
+
   // 活跃/连续天数(基于所选范围)
   const activeDays = perDay.size
   const daySet = new Set(days)
@@ -264,6 +287,75 @@ export function UsageStatsPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-2 text-sm font-semibold">供应商每日用量堆叠柱状图(Kimi vs GPT/Codex)</h2>
+          <svg viewBox={`0 0 ${W} ${H + 18}`} className="w-full rounded-xl border border-(--ui-stroke-tertiary)">
+            {[1, 0.5, 0].map(f => (
+              <g key={f}>
+                <line
+                  x1={PAD}
+                  x2={W - PAD}
+                  y1={H - PAD - f * (H - 2 * PAD)}
+                  y2={H - PAD - f * (H - 2 * PAD)}
+                  stroke="var(--ui-stroke-tertiary)"
+                  strokeDasharray={f === 0 ? undefined : '3 4'}
+                />
+                <text x={PAD - 6} y={H - PAD - f * (H - 2 * PAD) + 3} textAnchor="end" fontSize="9" fill="var(--ui-text-tertiary)">
+                  {human(maxProviderDay * f)}
+                </text>
+              </g>
+            ))}
+            {providerByDay.map((row, idx) => {
+              const bw = ((W - 2 * PAD) / providerByDay.length) * 0.55
+              const x = PAD + (idx * (W - 2 * PAD)) / providerByDay.length + bw * 0.4
+              const total = row.kimi + row.gpt
+              if (total <= 0) return null
+              const kimiH = (row.kimi / maxProviderDay) * (H - 2 * PAD)
+              const gptH = (row.gpt / maxProviderDay) * (H - 2 * PAD)
+              const tip =
+                `${row.day}\n` +
+                row.parts.map(p => `${MODEL_LABEL[p.model] ?? p.model}: ${human(p.tokens)}`).join('\n')
+              return (
+                <g key={row.day}>
+                  <title>{tip}</title>
+                  {row.kimi > 0 && (
+                    <rect x={x} y={H - PAD - kimiH} width={bw} height={kimiH} fill="#e07b39" rx="2">
+                      <title>{tip}</title>
+                    </rect>
+                  )}
+                  {row.gpt > 0 && (
+                    <rect x={x} y={H - PAD - kimiH - gptH} width={bw} height={gptH} fill="#3a56c5" rx="2">
+                      <title>{tip}</title>
+                    </rect>
+                  )}
+                  {(idx % 5 === 0 || idx === providerByDay.length - 1) && (
+                    <text
+                      x={x + bw / 2}
+                      y={H - PAD + 12}
+                      textAnchor="middle"
+                      fontSize="9"
+                      fill="var(--ui-text-tertiary)"
+                    >
+                      {row.day.slice(5).replace('-', '/')}
+                    </text>
+                  )}
+                </g>
+              )
+            })}
+          </svg>
+          <div className="mt-1.5 flex gap-4 text-xs text-(--ui-text-secondary)">
+            <span className="inline-flex items-center gap-1.5">
+              <i className="size-2.5 rounded-sm" style={{ background: '#e07b39' }} />
+              Kimi(套餐额度)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <i className="size-2.5 rounded-sm" style={{ background: '#3a56c5' }} />
+              GPT / Codex(订阅)
+            </span>
+            <span className="text-(--ui-text-quaternary)">悬停柱子可查看当日各模型明细</span>
           </div>
         </section>
 
