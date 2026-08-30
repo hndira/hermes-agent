@@ -110,6 +110,8 @@ export function UsageStatsPage() {
     return rows
   }, [data, days])
   const maxProviderDay = Math.max(1, ...providerByDay.map(r => r.kimi + r.gpt))
+  // 纵轴刻度文字(如 "9350.0 万")需要左侧留白,否则会被 SVG 边缘裁剪
+  const P_LP = 64
 
   // 活跃/连续天数(基于所选范围)
   const activeDays = perDay.size
@@ -296,22 +298,22 @@ export function UsageStatsPage() {
             {[1, 0.5, 0].map(f => (
               <g key={f}>
                 <line
-                  x1={PAD}
+                  x1={P_LP}
                   x2={W - PAD}
                   y1={H - PAD - f * (H - 2 * PAD)}
                   y2={H - PAD - f * (H - 2 * PAD)}
                   stroke="var(--ui-stroke-tertiary)"
                   strokeDasharray={f === 0 ? undefined : '3 4'}
                 />
-                <text x={PAD - 6} y={H - PAD - f * (H - 2 * PAD) + 3} textAnchor="end" fontSize="9" fill="var(--ui-text-tertiary)">
+                <text x={P_LP - 8} y={H - PAD - f * (H - 2 * PAD) + 3} textAnchor="end" fontSize="9" fill="var(--ui-text-tertiary)">
                   {human(maxProviderDay * f)}
                 </text>
               </g>
             ))}
             {providerByDay.map((row, idx) => {
-              const slot = (W - 2 * PAD) / providerByDay.length
+              const slot = (W - P_LP - PAD) / providerByDay.length
               const barW = slot * 0.28
-              const x0 = PAD + idx * slot + slot * 0.16
+              const x0 = P_LP + idx * slot + slot * 0.16
               const total = row.kimi + row.gpt
               if (total <= 0) return null
               const kimiH = (row.kimi / maxProviderDay) * (H - 2 * PAD)
