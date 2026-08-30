@@ -1645,10 +1645,17 @@ def _build_child_agent(
     # The legacy `role` arg no longer participates (it asked the caller
     # to guess a fact the config already knows); it is still accepted and
     # normalised for wire compat, but capability comes from depth alone.
+    # ── Role resolution ─────────────────────────────────────────────────
+    # Fork patch: explicit-first. An explicitly requested 'orchestrator' is
+    # honored only when the kill switch is on and depth budget remains;
+    # everything else — including no role — is a plain 'leaf'. This restores
+    # the intuitive contract ("children are leaves unless told otherwise")
+    # while keeping nested delegation possible via role='orchestrator'.
     child_depth = getattr(parent_agent, "_delegate_depth", 0) + 1
     max_spawn = _get_max_spawn_depth()
     orchestrator_ok = _get_orchestrator_enabled() and child_depth < max_spawn
-    effective_role = "orchestrator" if orchestrator_ok else "leaf"
+    requested_role = _normalize_role(role)
+    effective_role = "orchestrator" if (requested_role == "orchestrator" and orchestrator_ok) else "leaf"
 
     # ── Subagent identity (stable across events, 0-indexed for TUI) ─────
     # subagent_id is generated here so the progress callback, the
@@ -2092,6 +2099,10 @@ def _build_child_agent(
     except Exception:
         logger.debug("subagent_start hook invocation failed", exc_info=True)
 
+    # Fork patch: stamp the resolved role so the execution-side leaf limiter
+    # (see _LEAF_LIMITER in _run_single_child) can count real workers only.
+    child._delegate_role = effective_role
+
     return child
 
 
@@ -2451,7 +2462,67 @@ def _apply_summary_budget(results: List[Dict[str, Any]], parent_agent) -> None:
         )
 
 
+# ── Fork patch: process-wide leaf-children concurrency limiter ──────────
+# The upstream cap counts delegation *units* (batches/dispatches), so a
+# batch of N tasks runs N children at once and concurrent background units
+# multiply that. This semaphore counts real EXECUTING leaf children instead.
+# Orchestrator-role children are exempt: they coordinate workers, and
+# counting them could deadlock (an orchestrator holds a slot while its own
+# leaves wait for slots). Config changes recreate the semaphore lazily.
+_LEAF_LIMITER_LOCK = threading.Lock()
+_LEAF_LIMITER = None  # (cap, BoundedSemaphore)
+
+
+def _leaf_limiter_acquire(child):
+    if getattr(child, "_delegate_role", "leaf") != "leaf":
+        return None
+    global _LEAF_LIMITER
+    cap = _get_max_concurrent_children()
+    with _LEAF_LIMITER_LOCK:
+        if _LEAF_LIMITER is None or _LEAF_LIMITER[0] != cap:
+            _LEAF_LIMITER = (cap, threading.BoundedSemaphore(max(1, cap)))
+        sem = _LEAF_LIMITER[1]
+    sem.acquire()
+    return sem
+
+
+def _leaf_limiter_release(slot):
+    if slot is not None:
+        try:
+            slot.release()
+        except ValueError:
+            pass
+
+
 def _run_single_child(
+    task_index: int,
+    goal: str,
+    child=None,
+    parent_agent=None,
+    *,
+    owner_session_id: Optional[str] = None,
+    owner_transport: Any = None,
+    owner_session_record: Any = None,
+    **kwargs,
+):
+    """Fork patch wrapper: enforce the process-wide leaf-children cap."""
+    slot = _leaf_limiter_acquire(child)
+    try:
+        return _run_single_child_impl(
+            task_index,
+            goal,
+            child,
+            parent_agent,
+            owner_session_id=owner_session_id,
+            owner_transport=owner_transport,
+            owner_session_record=owner_session_record,
+            **kwargs,
+        )
+    finally:
+        _leaf_limiter_release(slot)
+
+
+def _run_single_child_impl(
     task_index: int,
     goal: str,
     child=None,
