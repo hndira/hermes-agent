@@ -11,8 +11,8 @@ import threading
 
 import pytest
 
+import tools.delegate_tool as dt
 from tools.delegate_tool import (
-    _LEAF_LIMITER,
     _LEAF_LIMITER_LOCK,
     _leaf_limiter_acquire,
     _leaf_limiter_release,
@@ -57,18 +57,16 @@ class _FakeChild:
 
 @pytest.fixture(autouse=True)
 def _reset_limiter():
-    global _LEAF_LIMITER
-    with _LEAF_LIMITER_LOCK:
-        _LEAF_LIMITER = None
+    # 真正重置 tools.delegate_tool 模块内的限流器状态
+    with dt._LEAF_LIMITER_LOCK:
+        dt._LEAF_LIMITER = None
     # 临时把并发上限固定为 2,避免受 config.yaml 影响
-    import tools.delegate_tool as dt
-
     original = dt._get_max_concurrent_children
     dt._get_max_concurrent_children = lambda: 2
     yield
     dt._get_max_concurrent_children = original
-    with _LEAF_LIMITER_LOCK:
-        _LEAF_LIMITER = None
+    with dt._LEAF_LIMITER_LOCK:
+        dt._LEAF_LIMITER = None
 
 
 class TestLeafLimiter:

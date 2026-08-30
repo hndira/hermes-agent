@@ -134,7 +134,7 @@ class TestDelegateRequirements(unittest.TestCase):
 
         for parameters in (overrides["parameters"], definition["parameters"]):
             self.assertIn("up to 7", parameters["properties"]["tasks"]["description"])
-            self.assertNotIn("role", parameters["properties"])
+            self.assertIn("role", parameters["properties"])
         # Depth ceiling now rides the depth-derived recursion rule in the
         # top-level text (only rendered when nesting is available).
         self.assertIn("max_spawn_depth=4", overrides["description"])
@@ -1561,23 +1561,30 @@ class TestOrchestratorRoleSchema(unittest.TestCase):
             delegate_task(**kwargs)
             return mock_child
 
-    def test_role_is_depth_derived_not_caller_declared(self):
-        """With max_spawn_depth=2 (mocked), a depth-1 child has depth budget
-        left, so it becomes an orchestrator automatically — no role arg
-        needed, and a passed legacy role arg is ignored either way."""
+    def test_role_explicit_first(self):
+        """Fork: explicit-first semantics — default/explicit 'leaf' stays a
+        leaf; explicit 'orchestrator' is granted while depth budget remains
+        (max_spawn_depth=2, mocked)."""
         child = self._run_with_mock_child(_SENTINEL)
-        self.assertEqual(child._delegate_role, "orchestrator")
-        # Legacy explicit role='leaf' does not override the depth derivation.
+        self.assertEqual(child._delegate_role, "leaf")
         child = self._run_with_mock_child("leaf")
+        self.assertEqual(child._delegate_role, "leaf")
+        child = self._run_with_mock_child("orchestrator")
         self.assertEqual(child._delegate_role, "orchestrator")
 
-    def test_schema_no_longer_advertises_role(self):
-        """`role` left the advertised schema (capability is depth-derived);
-        the handler still accepts it for wire compat."""
+    def test_schema_advertises_explicit_first_role(self):
+        """Fork: per-task and top-level `role` are advertised again with
+        explicit-first semantics (leaf default; orchestrator gated by
+        orchestrator_enabled + depth budget)."""
         from tools.delegate_tool import DELEGATE_TASK_SCHEMA
         props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]
-        self.assertNotIn("role", props)
-        self.assertNotIn("role", props["tasks"]["items"]["properties"])
+        self.assertIn("role", props)
+        self.assertEqual(props["role"]["enum"], ["leaf", "orchestrator"])
+        self.assertIn("role", props["tasks"]["items"]["properties"])
+        self.assertEqual(
+            props["tasks"]["items"]["properties"]["role"]["enum"],
+            ["leaf", "orchestrator"],
+        )
 
     def test_schema_omits_acp_transport_fields(self):
         from tools.delegate_tool import DELEGATE_TASK_SCHEMA

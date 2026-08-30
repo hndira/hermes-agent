@@ -1655,12 +1655,6 @@ def _build_child_agent(
     import uuid as _uuid
 
     # ── Role resolution ─────────────────────────────────────────────────
-    # Depth-derived, not caller-declared: a child may delegate iff the
-    # kill switch is on and depth budget remains below max_spawn_depth.
-    # The legacy `role` arg no longer participates (it asked the caller
-    # to guess a fact the config already knows); it is still accepted and
-    # normalised for wire compat, but capability comes from depth alone.
-    # ── Role resolution ─────────────────────────────────────────────────
     # Fork patch: explicit-first (see _resolve_child_role).
     child_depth = getattr(parent_agent, "_delegate_depth", 0) + 1
     effective_role = _resolve_child_role(
@@ -1750,7 +1744,7 @@ def _build_child_agent(
         context,
         workspace_path=workspace_hint,
         role=effective_role,
-        max_spawn_depth=max_spawn,
+        max_spawn_depth=_get_max_spawn_depth(),
         child_depth=child_depth,
     )
     # Extract parent's API key so subagents inherit auth (e.g. Nous Portal).
@@ -4814,23 +4808,23 @@ def _build_tasks_param_description() -> str:
 
 
 def _build_role_param_description() -> str:
-    """Legacy helper — the `role` param is no longer advertised.
+    """Describe the (re-advertised) top-level `role` param.
 
-    Delegation capability is depth-derived (see the role-resolution block in
-    _build_child_agent): a child may itself delegate iff
-    delegation.orchestrator_enabled and its depth < max_spawn_depth. The
-    handler still accepts role for wire compat (old transcripts, kanban
-    dispatcher) but ignores it. Kept because external callers import this
-    symbol; returns the depth story for any such use.
+    Fork semantics — explicit-first: 'leaf' (default) cannot delegate;
+    'orchestrator' may itself call delegate_task while enabled and depth
+    budget remains (delegation.max_spawn_depth). Kept as its own helper
+    because external callers import this symbol.
     """
     try:
         max_depth = _get_max_spawn_depth()
     except Exception:
         max_depth = MAX_DEPTH
     return (
-        "Legacy parameter, ignored: whether a child can delegate is derived "
-        f"from delegation config (max_spawn_depth={max_depth}), not declared "
-        "by the caller."
+        "Explicit-first: 'leaf' (default) cannot delegate further; "
+        "'orchestrator' may itself call delegate_task to fan out sub-work "
+        f"while spawn depth remains (delegation.max_spawn_depth={max_depth}). "
+        "Orchestrator multiplies cost — pass it only when this child must "
+        "split its work into sub-children."
     )
 
 
@@ -4937,6 +4931,13 @@ DELEGATE_TASK_SCHEMA = {
                 # (see _resolve_child_role). 'leaf' default; 'orchestrator'
                 # granted only while enabled and depth budget remains.
                 "description": "(rebuilt at get_definitions() time)",
+            },
+            # Fork: top-level `role` re-advertised with explicit-first
+            # semantics (default 'leaf'); applies when `tasks` is omitted.
+            "role": {
+                "type": "string",
+                "enum": ["leaf", "orchestrator"],
+                "description": _build_role_param_description(),
             },
             # NOTE: the handler also accepts `background` (bool) — DEPRECATED,
             # ignored: top-level delegations always run in the background.
